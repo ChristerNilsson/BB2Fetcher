@@ -1,3 +1,5 @@
 BB2/
 bildbanken/
 *.pdf
+__pycache__/
+*.pyc
