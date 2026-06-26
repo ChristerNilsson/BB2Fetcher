@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the BB2/2011 tree and download its images from bilder.json."""
+"""Create the complete BB2 tree and download its images from bilder.json."""
 
 from __future__ import annotations
 
@@ -7,19 +7,20 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterator
 
-YEAR = "2011"
 URL_TEMPLATE = "https://storage.googleapis.com/bildbank2/Home/{image_id}.jpg"
 
 
 def image_entries(
     node: dict[str, object], relative_dir: Path = Path()
-) -> Iterator[tuple[Path, str]]:
-    """Yield (relative file path, image id) pairs from a JSON directory tree."""
+) -> Iterator[tuple[Path, str, int]]:
+    """Yield (relative file path, image id, expected size) from a JSON tree."""
     for name, value in node.items():
         path = relative_dir / name
         if isinstance(value, dict):
@@ -28,28 +29,26 @@ def image_entries(
             isinstance(value, list)
             and len(value) >= 6
             and isinstance(value[-1], str)
+            and isinstance(value[2], int)
         ):
-            yield path, value[-1]
+            yield path, value[-1], value[2]
         else:
             raise ValueError(f"Ogiltig bildpost i bilder.json: {path}")
 
 
-def load_year(json_path: Path) -> dict[str, object]:
+def load_tree(json_path: Path) -> dict[str, object]:
     with json_path.open(encoding="utf-8-sig") as source:
         data = json.load(source)
 
     if not isinstance(data, dict):
         raise ValueError("Roten i bilder.json måste vara ett objekt.")
-
-    year = data.get(YEAR)
-    if not isinstance(year, dict):
-        raise ValueError(f"Katalogen {YEAR!r} saknas i bilder.json.")
-    return year
+    return data
 
 
-def download(url: str, destination: Path, timeout: float) -> None:
+def download(url: str, destination: Path, timeout: float) -> int:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".part")
+    bytes_written = 0
 
     request = urllib.request.Request(
         url, headers={"User-Agent": "BB2Fetcher/1.0"}
@@ -61,10 +60,31 @@ def download(url: str, destination: Path, timeout: float) -> None:
             with temporary.open("wb") as output:
                 while chunk := response.read(1024 * 1024):
                     output.write(chunk)
+                    bytes_written += len(chunk)
         os.replace(temporary, destination)
+        return bytes_written
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def format_size(size: float) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if size < 1024 or unit == "TiB":
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    raise AssertionError("unreachable")
+
+
+def forecast(elapsed: float, downloaded_bytes: int, remaining_bytes: int) -> str:
+    if elapsed <= 0 or downloaded_bytes <= 0:
+        return "prognos saknas"
+    seconds_left = remaining_bytes / (downloaded_bytes / elapsed)
+    finish = datetime.now() + timedelta(seconds=seconds_left)
+    return (
+        f"klart cirka {finish:%Y-%m-%d %H:%M}"
+        f" ({timedelta(seconds=round(seconds_left))} kvar)"
+    )
 
 
 def fetch_images(
@@ -75,39 +95,60 @@ def fetch_images(
     timeout: float = 30,
     dry_run: bool = False,
 ) -> tuple[int, int, int]:
-    year_tree = load_year(json_path)
-    year_root = output_root / YEAR
-    entries = list(image_entries(year_tree))
+    tree = load_tree(json_path)
+    entries = list(image_entries(tree))
+    total_size = sum(expected_size for _, _, expected_size in entries)
+    print(f"{len(entries)} bilder, totalt cirka {format_size(total_size)}.")
 
     downloaded = skipped = failed = 0
-    for index, (relative_path, image_id) in enumerate(entries, start=1):
-        destination = year_root / relative_path
-        url = URL_TEMPLATE.format(image_id=image_id)
-
+    pending: list[tuple[Path, str, int]] = []
+    for relative_path, image_id, expected_size in entries:
+        destination = output_root / relative_path
         if destination.exists() and not overwrite:
             skipped += 1
-            print(f"[{index}/{len(entries)}] Finns redan: {destination}")
-            continue
+        else:
+            pending.append((relative_path, image_id, expected_size))
+
+    if skipped:
+        print(f"{skipped} filer finns redan och hoppas över.")
+
+    pending_size = sum(expected_size for _, _, expected_size in pending)
+    started = time.monotonic()
+    received_bytes = processed_expected_bytes = 0
+
+    for index, (relative_path, image_id, expected_size) in enumerate(
+        pending, start=1
+    ):
+        destination = output_root / relative_path
+        url = URL_TEMPLATE.format(image_id=image_id)
 
         if dry_run:
             destination.parent.mkdir(parents=True, exist_ok=True)
-            print(f"[{index}/{len(entries)}] Skulle hämta: {destination}")
+            print(f"[{index}/{len(pending)}] Skulle hämta: {destination}")
             continue
 
-        print(f"[{index}/{len(entries)}] Hämtar: {destination}")
+        print(f"[{index}/{len(pending)}] Hämtar: {destination}")
         try:
-            download(url, destination, timeout)
+            received_bytes += download(url, destination, timeout)
             downloaded += 1
         except (OSError, urllib.error.URLError) as error:
             failed += 1
             print(f"  FEL: {url}: {error}", file=sys.stderr)
+        processed_expected_bytes += expected_size
+
+        elapsed = time.monotonic() - started
+        remaining_bytes = max(0, pending_size - processed_expected_bytes)
+        print(
+            f"  {format_size(received_bytes)} hämtat, "
+            f"{forecast(elapsed, received_bytes, remaining_bytes)}"
+        )
 
     return downloaded, skipped, failed
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Skapa BB2/2011 och hämta bilderna som anges i bilder.json."
+        description="Skapa hela BB2-trädet och hämta bilderna i bilder.json."
     )
     parser.add_argument(
         "--json",

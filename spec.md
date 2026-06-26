@@ -6,4 +6,6 @@ där 8fB9JHW_vC tas från bilder.json
 Placera strukturen i katalogen BB2.
 Den ska bestå både av kataloger och filer.
 
-Inledningsvis hämtar vi bara katalogen 2011.
+Nu hämtar vi alla filer.
+
+Ge mig en prognos för när det blir klart.
