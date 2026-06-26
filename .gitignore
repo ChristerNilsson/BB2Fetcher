@@ -3,3 +3,4 @@ bildbanken/
 *.pdf
 __pycache__/
 *.pyc
+*.mp4

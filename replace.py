@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replace BB2 directory _I/_F/_R references with files or URL shortcuts.
+"""Replace BB2 directory references with files or URL shortcuts.
 
 By default the script validates and performs the planned renames/copies/URL file
 creation. Use --dry-run to only list the planned actions.
@@ -16,11 +16,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-FILE_REF_PATTERN = re.compile(r"_([IFR])(\d{5})")
+REF_PATTERN = re.compile(r"_([IFRL])(\d{5})|_([TCV])(\d+)")
 TARGET_BASENAME = {
     "I": "Inbjudan",
     "F": "Fakta",
     "R": "Resultat",
+    "L": "Länk",
+    "T": "Turnering",
+    "C": "Chess-Results",
+    "V": "Video",
 }
 
 
@@ -89,7 +93,7 @@ def is_url(value: str) -> bool:
 
 
 def remove_file_refs(name: str) -> str:
-    return FILE_REF_PATTERN.sub("", name)
+    return REF_PATTERN.sub("", name)
 
 
 def target_destination(
@@ -101,6 +105,19 @@ def target_destination(
 
 def url_file_content(url: str) -> str:
     return f"[InternetShortcut]\nURL={url}\n"
+
+
+def generated_url(tag: str, identifier: str) -> str | None:
+    if tag == "T":
+        return (
+            "https://member.schack.se/ShowTournamentServlet"
+            f"?id={identifier}&listingtype=2"
+        )
+    if tag == "C":
+        return f"https://chess-results.com/tnr{identifier}.aspx?lan=6&art=4"
+    if tag == "V":
+        return f"https://player.vimeo.com/video/{identifier}"
+    return None
 
 
 def iter_directories(root: Path, excluded_names: set[str]) -> list[Path]:
@@ -133,26 +150,29 @@ def planned_actions(
     actions: list[PlannedAction] = []
 
     for directory in iter_directories(root, excluded_names):
-        matches = list(FILE_REF_PATTERN.finditer(directory.name))
+        matches = list(REF_PATTERN.finditer(directory.name))
         if not matches:
             continue
 
         renamed_directory = directory.with_name(remove_file_refs(directory.name))
         for match in matches:
-            tag = match.group(1)
-            file_id = match.group(2)
-            entry = index.get(file_id)
+            tag = match.group(1) or match.group(3)
+            file_id = match.group(2) or match.group(4)
             source = None
             url = None
             warning = None
-            if entry is None:
-                warning = f"saknas i filindex: {file_id}"
-            elif entry.relative_path is not None:
-                source = files_root / entry.relative_path
-            elif entry.url is not None:
-                url = entry.url
-            else:
-                warning = f"varken lokal files/-post eller URL: {entry.reference}"
+
+            url = generated_url(tag, file_id)
+            if url is None:
+                entry = index.get(file_id)
+                if entry is None:
+                    warning = f"saknas i filindex: {file_id}"
+                elif entry.relative_path is not None:
+                    source = files_root / entry.relative_path
+                elif entry.url is not None:
+                    url = entry.url
+                else:
+                    warning = f"varken lokal files/-post eller URL: {entry.reference}"
 
             actions.append(
                 PlannedAction(
@@ -173,7 +193,10 @@ def planned_actions(
 def format_report(actions: list[PlannedAction], dry_run: bool) -> str:
     lines: list[str] = []
     if not actions:
-        return "Inga katalognamn med _I12345, _F12345 eller _R12345 hittades."
+        return (
+            "Inga katalognamn med _I12345, _F12345, _R12345, _L12345, "
+            "_T12345, _C12345 eller _V12345 hittades."
+        )
 
     if dry_run:
         lines.append("Planerade åtgärder, inga ändringar genomförs:")
@@ -250,7 +273,16 @@ def execute_actions(actions: list[PlannedAction], overwrite: bool) -> tuple[int,
     renamed_directories: dict[Path, Path] = {}
     renamed_count = written_count = 0
 
-    for action in actions:
+    execution_order = sorted(
+        actions,
+        key=lambda action: (
+            len(action.directory.parts),
+            str(action.directory).casefold(),
+        ),
+        reverse=True,
+    )
+
+    for action in execution_order:
         target_directory = renamed_directories.get(action.directory)
         if target_directory is None:
             print(f"Byter namn: {action.directory} -> {action.renamed_directory}")
@@ -278,7 +310,7 @@ def execute_actions(actions: list[PlannedAction], overwrite: bool) -> tuple[int,
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Ta bort _I12345, _F12345 och _R12345 ur BB2-katalognamn och "
+            "Ta bort _I/_F/_R/_L/_T/_C/_V-referenser ur BB2-katalognamn och "
             "kopiera motsvarande filer eller skapa .url-genvägar."
         )
     )
@@ -314,7 +346,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="skriv över befintliga Inbjudan/Fakta/Resultat-filer i målkatalogen",
+        help=(
+            "skriv över befintliga Inbjudan/Fakta/Resultat/Länk/"
+            "Turnering/Chess-Results/Video-filer i målkatalogen"
+        ),
     )
     return parser.parse_args()
 
