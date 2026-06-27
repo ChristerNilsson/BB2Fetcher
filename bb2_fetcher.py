@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the complete BB2 tree and download its images from bilder.json."""
+"""Create the BB2 tree and download selected images from bilder.json."""
 
 from __future__ import annotations
 
@@ -15,6 +15,15 @@ from pathlib import Path
 from typing import Iterator
 
 URL_TEMPLATE = "https://storage.googleapis.com/bildbank2/Home/{image_id}.jpg"
+DEFAULT_YEAR = "2011"
+
+
+def path_year(path: Path) -> str | None:
+    """Return the first path part that is exactly a four digit year."""
+    for part in path.parts:
+        if len(part) == 4 and part.isdigit():
+            return part
+    return None
 
 
 def image_entries(
@@ -91,14 +100,28 @@ def fetch_images(
     json_path: Path,
     output_root: Path,
     *,
+    year: str | None = DEFAULT_YEAR,
     overwrite: bool = False,
     timeout: float = 30,
     dry_run: bool = False,
 ) -> tuple[int, int, int]:
     tree = load_tree(json_path)
     entries = list(image_entries(tree))
+    if year is not None:
+        entries = [
+            entry for entry in entries if path_year(entry[0]) == year
+        ]
+
+    if not entries:
+        year_text = "alla år" if year is None else year
+        raise ValueError(f"Inga bilder hittades för {year_text}.")
+
     total_size = sum(expected_size for _, _, expected_size in entries)
-    print(f"{len(entries)} bilder, totalt cirka {format_size(total_size)}.")
+    year_text = "alla år" if year is None else year
+    print(
+        f"{len(entries)} bilder för {year_text}, "
+        f"totalt cirka {format_size(total_size)}."
+    )
 
     downloaded = skipped = failed = 0
     pending: list[tuple[Path, str, int]] = []
@@ -148,7 +171,7 @@ def fetch_images(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Skapa hela BB2-trädet och hämta bilderna i bilder.json."
+        description="Skapa BB2-trädet och hämta bilderna i bilder.json."
     )
     parser.add_argument(
         "--json",
@@ -161,6 +184,16 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("BB2"),
         help="målkatalog (standard: BB2)",
+    )
+    parser.add_argument(
+        "--year",
+        default=DEFAULT_YEAR,
+        help="hämta bara detta år; använd --all-years för alla år (standard: 2011)",
+    )
+    parser.add_argument(
+        "--all-years",
+        action="store_true",
+        help="hämta alla år i stället för standardurvalet 2011",
     )
     parser.add_argument(
         "--overwrite",
@@ -183,10 +216,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    year = None if args.all_years else args.year
     try:
         downloaded, skipped, failed = fetch_images(
             args.json,
             args.output,
+            year=year,
             overwrite=args.overwrite,
             timeout=args.timeout,
             dry_run=args.dry_run,

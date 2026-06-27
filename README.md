@@ -1,7 +1,7 @@
 # BB2Fetcher
 
-Skapar hela katalogstrukturen `BB2` från `bilder.json` och hämtar samtliga
-bilder från Bildbank 2.
+Skapar katalogstrukturen `BB2` från `bilder.json` och hämtar bilder från
+Bildbank 2. Standardkörningen hämtar bara år `2011`, enligt `spec.md`.
 
 Kör från projektkatalogen:
 
@@ -11,6 +11,18 @@ python bb2_fetcher.py
 
 Filer som redan finns lämnas orörda, så programmet kan köras igen efter ett
 avbrott. Använd `--overwrite` för att hämta om dem.
+
+För att hämta ett annat år:
+
+```powershell
+python bb2_fetcher.py --year 2012
+```
+
+För att hämta alla år:
+
+```powershell
+python bb2_fetcher.py --all-years
+```
 
 Under körningen visas en löpande prognos med beräknad sluttid. Prognosen bygger
 på den faktiska hastigheten sedan programmet startade och blir därför
@@ -62,10 +74,22 @@ felstavningar av `Alexandra`/`Alexander`.
 python stavfel.py
 ```
 
+## Date taken
+
+`date_taken.py` skriver bilder i `BB2` som saknar EXIF-fältet
+`DateTimeOriginal`, det vill säga normalt “date taken”, till `date_taken.txt`.
+Standardurvalet är sökvägar som innehåller `2025-07-12`, och rapporten tar med
+alla EXIF-attribut som hittas för varje listad fil.
+
+```powershell
+python date_taken.py
+```
+
 Övriga alternativ visas med:
 
 ```powershell
 python bb2_fetcher.py --help
 python fetch_files.py --help
 python stavfel.py --help
+python date_taken.py --help
 ```
